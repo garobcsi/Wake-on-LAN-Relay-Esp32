@@ -69,6 +69,9 @@ def blink_led_safe(times, color=WHITE, speed=0.1):
     except Exception:
         pass
 
+def format_mac(mac_bytes):
+    return "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}".format(*mac_bytes).upper()
+
 # --- USB/SERIAL CHECK ---
 
 if STOP_ON_USB_CONNECTION and (supervisor.runtime.usb_connected or supervisor.runtime.serial_connected):
@@ -91,7 +94,11 @@ try:
     
     wifi.radio.connect(CIRCUITPY_WIFI_SSID, CIRCUITPY_WIFI_PASSWORD)
     print(f"Connected! ESP32 IP: {wifi.radio.ipv4_address}")
-    print(f"Targeting: {TARGET_IP_ADDRESS} for device {TARGET_MAC_ADDRESS}")
+    
+    MY_MAC_BYTES = wifi.radio.mac_address
+    print(f"ESP32 MAC Address: {format_mac(MY_MAC_BYTES)}")
+    print("NOTE: Send Magic Packets to the ESP32 MAC above to trigger the relay.")
+    
 except Exception as e:
     print(f"WiFi Connection failed: {e}")
     time.sleep(10)
@@ -121,12 +128,19 @@ while True:
         size, sender_address = sock.recvfrom_into(buffer)
         
         if size >= 102 and buffer[0:6] == b'\xff' * 6:
-            print(f"[{time.monotonic()}] Magic Packet received from {sender_address[0]}")
             
-            sock.sendto(target_packet, (TARGET_IP_ADDRESS, PORT))
+            packet_target_mac = buffer[6:12]
             
-            print(f"--> Relayed packet to {TARGET_IP_ADDRESS}")
-            blink_led_safe(1, GREEN, speed=0.05)
+            if packet_target_mac == MY_MAC_BYTES:
+                print(f"[{time.monotonic()}] Valid Trigger: Packet matches ESP32 MAC!")
+                
+                sock.sendto(target_packet, (TARGET_IP_ADDRESS, PORT))
+                
+                print(f"--> Relayed Wake-Up packet to {TARGET_IP_ADDRESS} for {TARGET_MAC_ADDRESS}")
+                blink_led_safe(5, GREEN, speed=0.05)
+            else:
+                print(f"Ignored: Magic Packet detected, but for {format_mac(packet_target_mac)}")
+                blink_led_safe(5, BLUE, speed=0.05) 
         else:
             print(f"Ignored non-magic packet from {sender_address[0]}")
 
