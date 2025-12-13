@@ -1,3 +1,4 @@
+import os
 import time
 import wifi
 import socketpool
@@ -6,37 +7,47 @@ import board
 import digitalio
 import microcontroller
 import supervisor
+import neopixel
 
 # --- CONFIGURATION ---
 
-# 1. WIFI SSID & Password 
-CIRCUITPY_WIFI_SSID = "Your_WiFi_Name"
-CIRCUITPY_WIFI_PASSWORD = "Your_WiFi_Password"
+# 1. WIFI SSID & Password
+CIRCUITPY_WIFI_SSID = os.getenv("CIRCUITPY_WIFI_SSID")
+CIRCUITPY_WIFI_PASSWORD = os.getenv("CIRCUITPY_WIFI_PASSWORD")
 
 # 2. The MAC address of the PC you want to wake
-TARGET_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF" 
+TARGET_MAC_ADDRESS = "AA:BB:CC:DD:EE:FF"
 
 # 3. The IP Address to send the packet to.
-# BEST OPTION: Use your network's "Broadcast Address" (e.g. 192.168.1.255).
-# This ensures the packet reaches the PC even if the router has forgotten its IP while it sleeps.
-# ALTERNATIVE: You can try the specific IP (e.g. 192.168.1.105), but it might fail if the ARP cache clears.
+# Use the broadcast address (ends in .255 for standard /24 networks).
 TARGET_IP_ADDRESS = "192.168.1.255"
 
 # 4. The Port (Standard WoL is 9 or 7)
-PORT = 9 
+PORT = 9
 
 # 5. USB DETECTION SETTING
-# If True: The code will NOT run network logic when plugged into a computer.
-# If False: The code will run even if plugged into a computer (useful for debugging).
 STOP_ON_USB_CONNECTION = True
 
+# 6. NEOPIXEL BRIGHTNESS AND COLORS
+NEOPIXEL_BRIGHTNESS = 0.01
+
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+BLUE = (0, 0, 255)
+YELLOW = (255, 150, 0)
+PURPLE = (180, 0, 255)
+WHITE = (255, 255, 255)
+OFF = (0, 0, 0)
+
 # --- HARDWARE SETUP ---
+led = None
+
 try:
-    led = digitalio.DigitalInOut(board.LED)
-    led.direction = digitalio.Direction.OUTPUT
+    led = neopixel.NeoPixel(board.NEOPIXEL, 1)
+    led.brightness = NEOPIXEL_BRIGHTNESS
+    led.fill(OFF)
 except Exception as e:
-    print(f"Hardware Warning: LED setup failed ({e})")
-    led = None
+    print(f"Hardware Warning: NeoPixel setup failed ({e})")
 
 # --- HELPER FUNCTIONS ---
 
@@ -47,41 +58,44 @@ def create_magic_packet(mac_address):
     mac_bytes = binascii.unhexlify(mac_cleaned)
     return b'\xff' * 6 + mac_bytes * 16
 
-def blink_led_safe(times, speed=0.1):
+def blink_led_safe(times, color=WHITE, speed=0.1):
     if led is None: return
     try:
         for _ in range(times):
-            led.value = True
+            led.fill(color)
             time.sleep(speed)
-            led.value = False
+            led.fill(OFF)
             time.sleep(speed)
     except Exception:
-        pass 
+        pass
 
-# --- USB CHECK ---
+# --- USB/SERIAL CHECK ---
 
 if STOP_ON_USB_CONNECTION and (supervisor.runtime.usb_connected or supervisor.runtime.serial_connected):
     print("------------------------------------------------")
-    print("USB DATA CONNECTION DETECTED")
+    print("USB/SERIAL CONNECTION DETECTED")
     print("WoL Relay is PAUSED to allow coding/editing.")
     print("Unplug from PC and use a wall charger to run.")
     print("------------------------------------------------")
     
     while True:
-        blink_led_safe(10, speed=0.5) 
-        time.sleep(1)
+        blink_led_safe(10, YELLOW, 0.5)
 
 # --- NETWORK SETUP ---
 
 print("Init: Connecting to WiFi...")
 try:
+    wifi.radio.enabled = False
+    time.sleep(0.5)
+    wifi.radio.enabled = True
+    
     wifi.radio.connect(CIRCUITPY_WIFI_SSID, CIRCUITPY_WIFI_PASSWORD)
-    print(f"Connected! Pico IP: {wifi.radio.ipv4_address}")
+    print(f"Connected! ESP32 IP: {wifi.radio.ipv4_address}")
     print(f"Targeting: {TARGET_IP_ADDRESS} for device {TARGET_MAC_ADDRESS}")
 except Exception as e:
     print(f"WiFi Connection failed: {e}")
     time.sleep(10)
-    blink_led_safe(2)
+    blink_led_safe(2, RED, speed=0.2)
     microcontroller.reset()
 
 try:
@@ -95,7 +109,7 @@ try:
 except Exception as e:
     print(f"Socket setup failed: {e}")
     time.sleep(10)
-    blink_led_safe(3)
+    blink_led_safe(3, RED, speed=0.2)
     microcontroller.reset()
 
 # --- MAIN LOOP ---
@@ -112,19 +126,19 @@ while True:
             sock.sendto(target_packet, (TARGET_IP_ADDRESS, PORT))
             
             print(f"--> Relayed packet to {TARGET_IP_ADDRESS}")
-            blink_led_safe(1)
+            blink_led_safe(1, GREEN, speed=0.05)
         else:
             print(f"Ignored non-magic packet from {sender_address[0]}")
 
     except OSError as e:
         print(f"Network Error: {e}")
         time.sleep(10)
-        blink_led_safe(4)
-        if e.errno == 104 or e.errno == 113: # ECONNRESET or EHOSTUNREACH
+        blink_led_safe(4, RED, speed=0.2)
+        if e.errno == 104 or e.errno == 113 or e.errno == 12: # ECONNRESET, EHOSTUNREACH, ENOMEM
             microcontroller.reset()
 
     except Exception as e:
         print(f"Unexpected Error: {e}")
         time.sleep(10)
-        blink_led_safe(5)
+        blink_led_safe(5, RED, speed=0.2)
         microcontroller.reset()
