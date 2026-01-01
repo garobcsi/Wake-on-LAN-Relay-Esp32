@@ -8,6 +8,7 @@ import digitalio
 import microcontroller
 import supervisor
 import neopixel
+import errno
 
 # --- CONFIGURATION ---
 
@@ -109,7 +110,8 @@ try:
     pool = socketpool.SocketPool(wifi.radio)
     sock = pool.socket(pool.AF_INET, pool.SOCK_DGRAM)
     sock.bind(("0.0.0.0", PORT))
-    sock.setblocking(True)
+    
+    sock.settimeout(1.0) 
     
     target_packet = create_magic_packet(TARGET_MAC_ADDRESS)
     print(f"Ready: Listening on UDP Port {PORT}")
@@ -122,6 +124,12 @@ except Exception as e:
 # --- MAIN LOOP ---
 
 while True:
+    if not wifi.radio.connected:
+        print("!! WiFi Disconnected. Resetting... !!")
+        blink_led_safe(10, RED, speed=0.2)
+        time.sleep(0.5)
+        microcontroller.reset()
+
     try:
         buffer = bytearray(1024)
         
@@ -145,11 +153,16 @@ while True:
             print(f"Ignored non-magic packet from {sender_address[0]}")
 
     except OSError as e:
+        # 110/116 is ETIMEDOUT (Timeout). 11 is EAGAIN. 
+        # If these happen, it just means no packet arrived in the last second.
+        # We ignore these and loop back to check WiFi.
+        if e.errno in (11, 110, 116):
+            continue
+            
         print(f"Network Error: {e}")
         time.sleep(10)
         blink_led_safe(4, RED, speed=0.2)
-        if e.errno == 104 or e.errno == 113 or e.errno == 12: # ECONNRESET, EHOSTUNREACH, ENOMEM
-            microcontroller.reset()
+        microcontroller.reset()
 
     except Exception as e:
         print(f"Unexpected Error: {e}")
